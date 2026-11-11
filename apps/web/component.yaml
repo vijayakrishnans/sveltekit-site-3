@@ -1,0 +1,99 @@
+apiVersion: sourceplane.io/v1
+kind: Component
+metadata:
+  name: web
+  description: The SvelteKit site (SvelteKit on Cloudflare Workers + Static Assets via @sveltejs/adapter-cloudflare, per environment)
+spec:
+  type: cloudflare-workers-assets-turbo
+  lifecycle: production
+  owner: platform
+  # Its pages, attached to it in the workspace's catalog: what the Docs
+  # library shows for it, and what the catalog's docs and runbook checks read.
+  # Generated from what this manifest and its sources declare.
+  docs:
+    overview: docs/overview.md
+    pages:
+      - { path: docs/architecture.md, role: architecture, title: Architecture }
+      - { path: docs/runbook.md, role: runbook, title: Runbook }
+  # `app`, not `web`: a domain and a component share one name space in the
+  # catalog, and a domain called `web` hid this component from it.
+  domain: app
+  path: apps/web
+  # Its own lane per environment: the framework build is the longest job in
+  # the plan, and a shared lane would wait on it.
+  lane: isolated
+  subscribe:
+    environments:
+      - name: dev
+        profile: verify
+      - name: stage
+        profile: verify
+        profileRules:
+          - profile: deploy
+            when:
+              triggerRef: github-push-main
+      - name: prod
+        profile: verify
+        profileRules:
+          - profile: deploy
+            when:
+              triggerRef: github-push-main
+  # How the site runs itself for orun.work's live Preview tab
+  # (saas-parallel-baselining PB4): `orun preview` starts this, and a coding
+  # session keeps it running while it works, so the person watches it change
+  # as it is built. The dev server binds the box's loopback only, on a fixed
+  # port, and installs first, so a checkout the session has not installed yet
+  # still comes up.
+  # --strictPort makes Vite fail rather than move to another port when 5173 is
+  # taken.
+  preview:
+    run:
+      - sh
+      - -c
+      - pnpm install --frozen-lockfile --prefer-offline --filter "@app/web..." && exec node_modules/.bin/vite dev --host 127.0.0.1 --port 5173 --strictPort
+    port: 5173
+    path: /
+    env:
+      NODE_OPTIONS: --max-old-space-size=512
+  parameters:
+    nodeVersion: '22'
+    pnpmVersion: '10.12.1'
+
+    workspaceDir: ../..
+    appDir: .
+
+    turboFilter: '@app/web'
+    # The committed config: worker name, compatibility date and flags, the
+    # Worker entry and the ASSETS binding over the adapter's output.
+    wranglerConfig: wrangler.jsonc
+
+    # @sveltejs/adapter-cloudflare emits the Worker as
+    # .svelte-kit/cloudflare/_worker.js and the static output (prerendered
+    # pages, _app/* hashed assets, static/) beside it — both deploy in one
+    # `wrangler deploy`.
+    workerEntrypoint: .svelte-kit/cloudflare/_worker.js
+    assetsDir: .svelte-kit/cloudflare
+
+    # Per-env worker name: sveltekit-site-3-web-{dev,stage,prod}.
+    workerName: sveltekit-site-3-web
+    environmentAwareWorkerName: true
+
+    # The account's workers.dev subdomain; exported to the smoke step as
+    # ${WORKERS_DEV_SUBDOMAIN} and used to build ${DEPLOYED_URL}.
+    workersDevSubdomain: vijayakrishnan12994
+
+    installCommand: pnpm install --frozen-lockfile
+    buildCommand: pnpm exec turbo run build --filter=@app/web
+
+    # Smoke: the home page (pre-rendered, served from the assets) carries the
+    # nav's todos link, and an unknown path is SvelteKit's own 404 page,
+    # rendered by the Worker. Not the site's name: that is the owner's to
+    # change, and HTML-escaped when it carries an `&`. Each response is
+    # buffered before grep so an early match cannot SIGPIPE curl.
+    smokeCommand: 'html=$(curl -sfL "${DEPLOYED_URL}/") && echo "${html}" | grep -q ''href="/todos"'' && nf=$(curl -sL "${DEPLOYED_URL}/smoke-not-found") && echo "${nf}" | grep -q ''<h1>404</h1>'''
+  labels:
+    team: platform
+    layer: delivery
+    surface: web
+    runtime: cloudflare
+# orun: redeploy 01-product as_1d97bbf8d2db40f3876b
